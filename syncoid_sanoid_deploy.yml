@@ -1,0 +1,243 @@
+---
+
+- name: Deploy Syncoid and Sanoid for ZFS replication
+  hosts: zfs_hosts
+  become: true
+  vars:
+    # Base configuration - can be overridden
+    ssh_key_path: "/root/.ssh/id_ed25519"
+    sanoid_config_path: "/etc/sanoid/sanoid.conf"
+    syncoid_cron_minute: "30"
+    syncoid_cron_hour: "*/4"
+    sanoid_cron_minute: "0"
+    sanoid_cron_hour: "*"
+    visualization_data: {}
+    all_replication_hosts: []
+
+  pre_tasks:
+    # Load all dataset configuration files from dataset_configs directory
+    - name: Find all dataset configuration files
+      find:
+        paths: "{{ playbook_dir }}/dataset_configs"
+        patterns: "*.yml"
+      register: dataset_config_files
+      delegate_to: localhost
+      run_once: true
+
+    # Initialize collection variables for all hosts
+    - name: Initialize empty dataset lists for all hosts
+      set_fact:
+        source_datasets: []
+        target_datasets: []
+        dataset_configs: {}
+      run_once: false
+
+    # Load each dataset configuration file and distribute to hosts
+    - name: Load dataset configurations
+      include_vars:
+        file: "{{ item.path }}"
+        name: "{{ item.path | basename }}"
+      loop: "{{ dataset_config_files.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+
+    # Assign datasets to the correct hosts
+    - name: Add dataset to source host
+      set_fact:
+        source_datasets: "{{ source_datasets + [hostvars[inventory_hostname][item.path | basename].dataset_path] }}"
+        dataset_configs: "{{ dataset_configs | combine({hostvars[inventory_hostname][item.path | basename].dataset_path: hostvars[inventory_hostname][item.path | basename] }) }}"
+      when: inventory_hostname == hostvars[inventory_hostname][item.path | basename].source_host
+      loop: "{{ dataset_config_files.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+
+    - name: Add dataset to target host
+      set_fact:
+        target_datasets: "{{ target_datasets + [hostvars[inventory_hostname][item.path | basename].dataset_path] }}"
+      when: inventory_hostname == hostvars[inventory_hostname][item.path | basename].target_host
+      loop: "{{ dataset_config_files.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+
+    - name: Gather all host dataset information
+      set_fact:
+        dataset_info: "{{ dataset_info | default({}) | combine({inventory_hostname: {'source_datasets': source_datasets, 'target_datasets': target_datasets, 'dataset_configs': dataset_configs}}) }}"
+      delegate_to: localhost
+      run_once: false
+
+    # Generate Markdown documentation
+    - name: Create documentation directory
+      file:
+        path: "{{ playbook_dir }}/docs"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      run_once: true
+
+    - name: Generate Markdown documentation
+      template:
+        src: templates/replication_diagram.md.j2
+        dest: "{{ playbook_dir }}/docs/replication_topology.md"
+      delegate_to: localhost
+      run_once: true
+      vars:
+        hosts_info: "{{ hostvars }}"
+
+  tasks:
+    - name: Install required packages
+      package:
+        name:
+          - git
+          - perl
+          - libconfig-inifiles-perl
+          - libcapture-tiny-perl
+          - libssh2-1
+          - mbuffer
+          - lzop
+          - pv
+        state: present
+
+    - name: Clone syncoid/sanoid repository
+      git:
+        repo: "https://github.com/jimsalterjrs/sanoid.git"
+        dest: "/root/sanoid"
+        version: master
+
+    - name: Create required directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /etc/sanoid
+
+    - name: Copy syncoid and sanoid scripts to sbin
+      copy:
+        src: "/root/sanoid/{{ item }}"
+        dest: "/usr/sbin/{{ item }}"
+        mode: '0755'
+        remote_src: yes
+      loop:
+        - syncoid
+        - sanoid
+        - findoid
+
+    - name: Create sanoid configuration directory
+      file:
+        path: "/etc/sanoid"
+        state: directory
+        mode: '0755'
+
+    - name: Create sanoid example configuration file
+      copy:
+        src: "/root/sanoid/sanoid.defaults.conf"
+        dest: "/etc/sanoid/sanoid.defaults.conf"
+        mode: '0644'
+        remote_src: yes
+
+    - name: Configure sanoid
+      template:
+        src: templates/sanoid.conf.j2
+        dest: "{{ sanoid_config_path }}"
+        mode: '0644'
+
+    # SSH key setup (for hosts that are sources)
+    - name: Create SSH config directory
+      file:
+        path: /root/.ssh
+        state: directory
+        mode: '0700'
+
+    - name: Generate SSH key for ZFS replication
+      openssh_keypair:
+        path: "{{ ssh_key_path }}"
+        type: ed25519
+        mode: '0600'
+      when: source_datasets | length > 0
+
+    - name: Fetch public keys from source hosts
+      fetch:
+        src: "{{ ssh_key_path }}.pub"
+        dest: "/tmp/{{ inventory_hostname }}_zfs_replication_key.pub"
+        flat: yes
+      when: source_datasets | length > 0
+
+    # Create empty facts in case the hosts are skipped in the next step
+    - name: Set fact for target host mapping
+      set_fact:
+        target_host_mapping: {}
+
+    # Determine target hosts for each source dataset
+    - name: Set fact for target host mapping
+      set_fact:
+        target_host_mapping: >-
+          {{ target_host_mapping | default({}) | combine({
+             item.dataset_path: item.target_host
+          }) }}
+      loop: "{{ dataset_configs.values() | list }}"
+      when: source_datasets | length > 0 and item.source_host == inventory_hostname
+
+    - name: Debug target host mapping
+      debug:
+        var: target_host_mapping
+      when: source_datasets | length > 0
+
+    - name: Debug print item
+      debug:
+        var: item.value
+      loop: "{{ target_host_mapping | dict2items }}"
+
+    # Update known_hosts
+    - name: Update known_hosts
+      known_hosts:
+        name: "{{ item.target_host }}"
+        key: "{{ lookup('pipe', 'ssh-keyscan -t rsa,ecdsa,ed25519 ' + item.target_host) }}"
+        state: present
+      loop: "{{ dataset_configs.values() | list }}"
+      when: source_datasets | length > 0 and item.source_host == inventory_hostname
+
+    - name: Set up authorized keys on target hosts
+      authorized_key:
+        user: root
+        state: present
+        key: "{{ lookup('file', '/tmp/' + inventory_hostname + '_zfs_replication_key.pub') }}"
+      loop: "{{ target_host_mapping | dict2items }}"
+      delegate_to: "{{ item.value }}"
+
+    # Set up cron jobs for sanoid and syncoid
+    - name: Configure sanoid cron job for snapshots
+      cron:
+        name: "Run sanoid for snapshots on {{ item }}"
+        minute: "{{ dataset_configs[item].sanoid_cron_minute | default(sanoid_cron_minute) }}"
+        hour: "{{ dataset_configs[item].sanoid_cron_hour | default(sanoid_cron_hour) }}"
+        job: "/usr/sbin/sanoid --take-snapshots {{ item }}"
+      loop: "{{ source_datasets }}"
+      when: source_datasets | length > 0
+
+    - name: Configure syncoid cron job for replication
+      cron:
+        name: "Run syncoid for replication of {{ item.dataset_path }}"
+        minute: "{{ item.syncoid_cron_minute | default(syncoid_cron_minute) }}"
+        hour: "{{ item.syncoid_cron_hour | default(syncoid_cron_hour) }}"
+        job: "/usr/sbin/syncoid {{ item.syncoid_options | default('--no-sync-snap') }} {{ item.dataset_path }} {{ item.target_host }}:{{ item.dataset_path }}"
+      loop: "{{ dataset_configs.values() | list }}"
+      when: source_datasets | length > 0 and item.source_host == inventory_hostname
+
+    # Ensure ZFS modules are loaded
+    - name: Load ZFS kernel modules
+      modprobe:
+        name: zfs
+        state: present
+
+    # Initial setup - create first snapshots with sanoid
+    - name: Create initial snapshots
+      command: "/usr/sbin/sanoid --take-snapshots {{ item }}"
+      loop: "{{ source_datasets }}"
+      when: source_datasets | length > 0
+
+    # Initial replication from source to target
+    - name: Perform initial replication to target
+      command: "/usr/sbin/syncoid {{ dataset_configs[item].syncoid_options | default('--no-sync-snap') }} {{ item }} {{ dataset_configs[item].target_host }}:{{ item }}"
+      loop: "{{ source_datasets }}"
+      when: source_datasets | length > 0
+

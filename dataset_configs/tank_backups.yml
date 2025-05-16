@@ -1,0 +1,19 @@
+---
+
+dataset_path: "tank/dataset-01"
+source_host: "x86-bm-c1.sw.ocaml.org"
+target_host: "x86-bm-c3.sw.ocaml.org"
+
+# Use default cron schedule for this dataset
+
+# Additional syncoid options specific to this dataset
+syncoid_options: "--no-sync-snap --compress=zstd --exclude=tank/backups/test"
+
+# Custom snapshot retention policy
+retention:
+  hourly: 12
+  daily: 60
+  monthly: 24
+  yearly: 5
+  autosnap: "yes"
+  autoprune: "yes"

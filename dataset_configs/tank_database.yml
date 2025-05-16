@@ -1,0 +1,24 @@
+---
+
+dataset_path: "tank/dataset-03"
+source_host: "x86-bm-c2.sw.ocaml.org"
+target_host: "x86-bm-c3.sw.ocaml.org"
+
+# Custom schedule for database backups
+syncoid_cron_minute: "0"
+syncoid_cron_hour: "*/1"  # Hourly replication
+sanoid_cron_minute: "*/15"
+sanoid_cron_hour: "*"     # Snapshots every 15 minutes
+
+# Additional syncoid options specific to this dataset
+syncoid_options: "--no-sync-snap --compress=lz4 --no-privilege-elevation"
+
+# Custom snapshot retention policy for databases
+retention:
+  frequently: 4          # Keep 4 "frequently" snapshots (taken every 15 min)
+  hourly: 48             # Keep 48 hours of hourly snapshots
+  daily: 14              # Keep 2 weeks of daily snapshots
+  monthly: 3             # Keep 3 months of monthly snapshots
+  yearly: 1              # Keep 1 year of yearly snapshots
+  autosnap: "yes"
+  autoprune: "yes"

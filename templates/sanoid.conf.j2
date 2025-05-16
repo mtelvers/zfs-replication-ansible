@@ -1,0 +1,36 @@
+[template_default]
+frequently = 0
+hourly = 24
+daily = 30
+monthly = 6
+yearly = 1
+autosnap = yes
+autoprune = yes
+
+{% for dataset_path in source_datasets %}
+[{{ dataset_path }}]
+use_template = {{ dataset_configs[dataset_path].sanoid_template | default('default') }}
+{% if dataset_configs[dataset_path].retention is defined %}
+{% if dataset_configs[dataset_path].retention.frequently is defined %}
+frequently = {{ dataset_configs[dataset_path].retention.frequently }}
+{% endif %}
+{% if dataset_configs[dataset_path].retention.hourly is defined %}
+hourly = {{ dataset_configs[dataset_path].retention.hourly }}
+{% endif %}
+{% if dataset_configs[dataset_path].retention.daily is defined %}
+daily = {{ dataset_configs[dataset_path].retention.daily }}
+{% endif %}
+{% if dataset_configs[dataset_path].retention.monthly is defined %}
+monthly = {{ dataset_configs[dataset_path].retention.monthly }}
+{% endif %}
+{% if dataset_configs[dataset_path].retention.yearly is defined %}
+yearly = {{ dataset_configs[dataset_path].retention.yearly }}
+{% endif %}
+{% if dataset_configs[dataset_path].retention.autosnap is defined %}
+autosnap = {{ dataset_configs[dataset_path].retention.autosnap }}
+{% endif %}
+{% if dataset_configs[dataset_path].retention.autoprune is defined %}
+autoprune = {{ dataset_configs[dataset_path].retention.autoprune }}
+{% endif %}
+{% endif %}
+{% endfor %}

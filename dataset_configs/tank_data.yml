@@ -1,0 +1,23 @@
+---
+
+dataset_path: "tank/dataset-02"
+source_host: "x86-bm-c1.sw.ocaml.org"
+target_host: "x86-bm-c3.sw.ocaml.org"
+
+# Override the default cron schedule for this dataset
+syncoid_cron_minute: "15"
+syncoid_cron_hour: "*/2"
+sanoid_cron_minute: "0"
+sanoid_cron_hour: "*"
+
+# Additional syncoid options specific to this dataset
+syncoid_options: "--no-sync-snap --compress=zstd"
+
+# Custom snapshot retention policy
+retention:
+  hourly: 36
+  daily: 30
+  monthly: 12
+  yearly: 2
+  autosnap: "yes"
+  autoprune: "yes"
